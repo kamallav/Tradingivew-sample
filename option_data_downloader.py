@@ -9,8 +9,14 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.orm import sessionmaker
 import logging
 
-# --- Database Setup ---
+# --- Configuration ---
 DB_FILE = "options_data.db"
+UNDERLYING_CONFIG = {
+    "NIFTY": {"tradingsymbol": "NIFTY 50", "strike_step": 50},
+    "BANKNIFTY": {"tradingsymbol": "NIFTY BANK", "strike_step": 100}
+}
+
+# --- Database Setup ---
 engine = create_engine(f'sqlite:///{DB_FILE}')
 metadata = MetaData()
 
@@ -133,8 +139,16 @@ def load_instruments():
 def get_atm_strike(underlying_instrument, target_date):
     """Gets the ATM strike for a given underlying on a target date."""
     try:
+        config = UNDERLYING_CONFIG.get(underlying_instrument)
+        if not config:
+            logging.error(f"No configuration found for underlying: {underlying_instrument}")
+            return None
+
+        underlying_symbol = config['tradingsymbol']
+        strike_step = config['strike_step']
+
         # Get the token for the underlying index/stock
-        underlying_token = instrument_df[instrument_df['tradingsymbol'] == underlying_instrument].instrument_token.iloc[0]
+        underlying_token = instrument_df[instrument_df['tradingsymbol'] == underlying_symbol].instrument_token.iloc[0]
 
         # Fetch historical data for the underlying for that day
         from_date = target_date
@@ -142,17 +156,19 @@ def get_atm_strike(underlying_instrument, target_date):
         records = kite.historical_data(underlying_token, from_date, to_date, "day")
 
         if not records:
-            logging.warning(f"No historical data found for {underlying_instrument} on {target_date}.")
+            logging.warning(f"No historical data found for {underlying_symbol} on {target_date}.")
             return None
 
         # The close price of the day is our spot price
         spot_price = records[-1]['close']
 
-        # Round to the nearest strike (assuming 50-point strikes for NIFTY)
-        # This logic might need adjustment for other instruments
-        atm_strike = round(spot_price / 50) * 50
+        # Round to the nearest strike
+        atm_strike = round(spot_price / strike_step) * strike_step
         logging.info(f"ATM strike for {target_date} is {atm_strike} (Spot: {spot_price})")
         return atm_strike
+    except IndexError:
+        logging.error(f"Could not find instrument token for '{underlying_symbol}'. Check if the symbol is correct and present in the instrument list.")
+        return None
     except Exception as e:
         logging.error(f"Could not get ATM strike for {target_date}: {e}")
         return None
@@ -161,7 +177,12 @@ def get_relevant_contracts(underlying_symbol, expiry_date, atm_strike, strike_ra
     """
     Filters and returns relevant option contracts (ATM ± strike_range) for a given expiry.
     """
-    strike_width = 50 if underlying_symbol == "NIFTY" else 100  # Adjust for BANKNIFTY etc.
+    config = UNDERLYING_CONFIG.get(underlying_symbol)
+    if not config:
+        logging.error(f"No configuration found for underlying: {underlying_symbol}")
+        return pd.DataFrame()
+
+    strike_width = config['strike_step']
     min_strike = atm_strike - (strike_range * strike_width)
     max_strike = atm_strike + (strike_range * strike_width)
 
