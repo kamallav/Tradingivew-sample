@@ -214,6 +214,7 @@ def download_and_store_ohlc(contract_row, from_date, to_date):
             return
 
         df = pd.DataFrame(records)
+        df.rename(columns={'date': 'timestamp'}, inplace=True)
         df['instrument_token'] = instrument_token
         df['symbol'] = symbol
         df = df[['timestamp', 'instrument_token', 'symbol', 'open', 'high', 'low', 'close']]
